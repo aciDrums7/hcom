@@ -491,6 +491,17 @@ const START_HELP: &[HelpEntry] = &[
     ),
 ];
 
+const REGISTER_HELP: &[HelpEntry] = &[
+    (
+        "register --tool omp --name <name>",
+        "Register an externally launched omp session",
+    ),
+    ("  --tag <tag>", "Tag for the instance (e.g. project:<name>)"),
+    ("  --print-env", "Print KEY=VALUE lines for a wrapper to export"),
+    ("", ""),
+    ("", "Restores the saved cursor when the name already exists."),
+];
+
 const KILL_HELP: &[HelpEntry] = &[
     (
         "kill <name>...",
@@ -1292,6 +1303,7 @@ fn command_help_raw(name: &str) -> String {
         "bundle" => Some(BUNDLE_PAGE),
         "stop" => Some(&[STOP_HELP]),
         "start" => Some(&[START_HELP]),
+        "register" => Some(&[REGISTER_HELP]),
         "kill" => Some(&[KILL_HELP]),
         "listen" => Some(&[LISTEN_HELP]),
         "reset" => Some(&[RESET_HELP]),

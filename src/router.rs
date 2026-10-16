@@ -26,6 +26,7 @@ const COMMANDS: &[&str] = &[
     "events",
     "stop",
     "start",
+    "register",
     "listen",
     "status",
     "config",
@@ -652,6 +653,17 @@ pub fn dispatch() -> anyhow::Result<()> {
                 "f" | "fork" => crate::commands::fork::run(args, &flags)?,
                 _ => crate::commands::launch::run(args, &flags)?,
             };
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
+        }
+        Action::Command { ref cmd, ref args } if cmd == "register" => {
+            let (_, flags, help) = extract_global_flags_full(args);
+            if help {
+                crate::commands::help::print_command_help(cmd);
+                return Ok(());
+            }
+            let exit_code = crate::commands::register::run(args, &flags)?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
             }

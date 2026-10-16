@@ -223,6 +223,30 @@ fn list_json_empty() {
 }
 
 #[test]
+fn register_omp_prints_env_only_and_restores_name() {
+    let h = Hcom::new();
+    let (code, out, err) = h.run([
+        "register", "--tool", "omp", "--name", "smokeomp", "--tag", "project:smoke", "--print-env",
+    ]);
+    assert_eq!(code, 0, "stderr: {err}");
+    for line in out.lines() {
+        assert!(
+            line.contains('=') && line.split('=').next().unwrap().starts_with("HCOM_")
+                || line.starts_with("HCOM_OMP_PLUGIN="),
+            "non-env stdout line: {line}"
+        );
+    }
+    assert!(out.contains("HCOM_INSTANCE_NAME=smokeomp"));
+    assert!(out.contains("HCOM_LAUNCHED=1"));
+    assert!(out.contains("HCOM_PROCESS_ID="));
+    assert!(out.contains("HCOM_DIR="));
+    assert!(out.contains("HCOM_OMP_PLUGIN="));
+
+    let (code, _, err) = h.run(["register", "--tool", "claude", "--name", "x", "--print-env"]);
+    assert_ne!(code, 0, "stderr: {err}");
+}
+
+#[test]
 fn events_empty_in_fresh_dir() {
     let h = Hcom::new();
     let (code, stdout, _stderr) = h.run(["events", "--last", "5"]);
