@@ -809,7 +809,14 @@ fn start_bare_with_options(
         return Ok(0);
     }
 
-    instance_binding::initialize_instance_in_position_file(
+    // Registration keeps the saved unread cursor, including 0, which the
+    // placeholder promotion in initialize would otherwise reset to max.
+    let saved_cursor = if restore_existing {
+        db.get_instance_full(&name)?.map(|row| row.last_event_id)
+    } else {
+        None
+    };
+    let initialized = instance_binding::initialize_instance_in_position_file(
         db,
         &name,
         session_id.map(String::as_str),
@@ -825,6 +832,14 @@ fn start_bare_with_options(
         None,  // hints
         None,  // cwd_override
     );
+    if restore_existing && (!initialized || db.get_instance_full(&name)?.is_none()) {
+        bail!("Failed to register '{name}': instance row could not be persisted");
+    }
+    if let Some(cursor) = saved_cursor {
+        let mut updates = serde_json::Map::new();
+        updates.insert("last_event_id".into(), json!(cursor));
+        db.update_instance_fields(&name, &updates)?;
+    }
 
     if let Some(session_id) = session_id {
         db.set_session_binding(session_id, &name)?;
@@ -834,12 +849,13 @@ fn start_bare_with_options(
     }
 
     // Bind process if we have a process_id nobody else live owns
-    if let Some(ref process_id) = ctx.process_id
-        && process_owner
-            .as_ref()
-            .is_none_or(|owner| owner.name == name)
+    if let Some(process_id) = &ctx.process_id
+        && process_owner.as_ref().is_none_or(|owner| owner.name == name)
         && let Err(e) = db.set_process_binding(process_id, "", &name)
     {
+        if restore_existing {
+            return Err(e);
+        }
         eprintln!("[hcom] warn: set_process_binding failed for {name}: {e}");
     }
 

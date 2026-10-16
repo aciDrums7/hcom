@@ -139,4 +139,33 @@ mod tests {
         assert_eq!(row.last_event_id, 3);
         assert!(db.has_process_binding_for_instance("luna"));
     }
+
+    #[test]
+    #[serial]
+    fn reregister_keeps_zero_cursor_so_queued_messages_deliver() {
+        let (_dir, _hcom_dir, _home, _guard) = crate::hooks::test_helpers::isolated_test_env();
+        let flags = GlobalFlags::default();
+        let args = argv(&["register", "--tool", "omp", "--name", "luna", "--print-env"]);
+        assert_eq!(run(&args, &flags).unwrap(), 0);
+
+        let db = HcomDb::open().unwrap();
+        let mut cursor = serde_json::Map::new();
+        cursor.insert("last_event_id".into(), json!(0));
+        db.update_instance_fields("luna", &cursor).unwrap();
+
+        // Message queued while luna was down, after its saved cursor of 0.
+        db.log_event(
+            "message",
+            "luna",
+            &json!({"from": "bigboss", "text": "queued", "scope": "mentions", "mentions": ["luna"]}),
+        )
+        .unwrap();
+
+        assert_eq!(run(&args, &flags).unwrap(), 0);
+        let row = db.get_instance_full("luna").unwrap().unwrap();
+        assert_eq!(row.last_event_id, 0, "re-register must not skip queued events");
+        let unread = db.get_unread_messages("luna");
+        assert_eq!(unread.len(), 1);
+        assert_eq!(unread[0].text, "queued");
+    }
 }
