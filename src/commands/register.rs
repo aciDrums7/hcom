@@ -1,22 +1,22 @@
 //! Register: `hcom register --tool omp --name <name> [--tag <tag>] --print-env`.
 //!
 //! Creates (or restores) a named identity for an omp session that hcom did not
-//! launch, so a wrapper can start omp with messaging. It is the self-registration
-//! step of the SMHL agent-messaging design, not a general launcher.
+//! launch, so a wrapper can start omp with messaging. It reuses the bare-start
+//! path in `start.rs` with the tool forced to omp.
 //!
-//! Output with `--print-env` is KEY=VALUE lines only on stdout. Failures exit
-//! nonzero with the reason on stderr; the wrapper then starts omp without hcom.
+//! With `--print-env`, stdout is KEY=VALUE lines only. Failures exit nonzero
+//! with the reason on stderr; the wrapper then starts omp without hcom.
 
 use anyhow::{Result, bail};
-use serde_json::json;
 
+use crate::commands::start;
 use crate::db::HcomDb;
 use crate::hooks::omp::PER_RUN;
 use crate::hooks::runtime::{self, LaunchCtx};
 use crate::identity;
-use crate::instance_binding;
 use crate::paths;
 use crate::router::GlobalFlags;
+use crate::shared::context::HcomContext;
 use crate::tool::Tool;
 
 /// Parsed arguments for `hcom register`.
@@ -58,7 +58,7 @@ pub fn run(argv: &[String], flags: &GlobalFlags) -> Result<i32> {
         bail!("{}", identity::base_name_error(&name));
     }
 
-    // Publish the plugin first: a failure here must leave no half-registered row.
+    // Publish the plugin before touching the DB: a failure leaves no row behind.
     let injection = runtime::plan(&PER_RUN, &LaunchCtx::ambient(Tool::Omp, false))?;
     let [flag, plugin] = injection.args.as_slice() else {
         bail!("omp plugin injection did not produce `-e <path>`");
@@ -68,51 +68,20 @@ pub fn run(argv: &[String], flags: &GlobalFlags) -> Result<i32> {
     }
 
     let db = HcomDb::open()?;
-    let hcom_dir = paths::hcom_dir();
-    let cwd = std::env::current_dir()?.to_string_lossy().to_string();
     let process_id = uuid::Uuid::new_v4().to_string();
+    let mut ctx = HcomContext::from_os();
+    ctx.process_id = Some(process_id.clone());
+    ctx.tool = Tool::Omp;
 
-    // A restarted session keeps its name. Its previous process binding is stale,
-    // so drop it before binding the new process. The row's saved cursor is not
-    // touched: initialize only seeds `last_event_id` when it is 0, so messages
-    // queued while the agent was down are delivered on return.
-    db.delete_process_bindings_for_instance(&name)?;
-    if !instance_binding::initialize_instance_in_position_file(
-        &db,
-        &name,
-        None, // session_id
-        None, // parent_session_id
-        None, // parent_name
-        None, // agent_id
-        None, // transcript_path
-        Some("omp"),
-        false, // background
-        args.tag.as_deref(),
-        None, // wait_timeout
-        None, // subagent_timeout
-        None, // hints
-        Some(&cwd),
-    ) {
-        bail!("failed to initialize instance '{name}'");
+    if start::register_bare(&db, &ctx, &name, args.tag.as_deref())? != 0 {
+        bail!("failed to register '{name}'");
     }
-    db.set_process_binding(&process_id, "", &name)?;
-
-    db.log_event(
-        "life",
-        &name,
-        &json!({
-            "action": "registered",
-            "tool": "omp",
-            "name": name,
-        }),
-    )
-    .ok();
 
     if args.print_env {
         println!("HCOM_LAUNCHED=1");
         println!("HCOM_PROCESS_ID={process_id}");
         println!("HCOM_INSTANCE_NAME={name}");
-        println!("HCOM_DIR={}", hcom_dir.display());
+        println!("HCOM_DIR={}", paths::hcom_dir().display());
         println!("HCOM_OMP_PLUGIN={plugin}");
     } else {
         println!("registered {name}");
@@ -123,6 +92,7 @@ pub fn run(argv: &[String], flags: &GlobalFlags) -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use serial_test::serial;
 
     fn argv(parts: &[&str]) -> Vec<String> {

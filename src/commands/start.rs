@@ -689,6 +689,28 @@ fn resolve_native_session_id(ctx: &HcomContext) -> Option<String> {
 
 /// Path C: Bare start — detect tool or create adhoc instance.
 fn start_bare(db: &HcomDb, ctx: &HcomContext, explicit_name: Option<&str>) -> Result<i32> {
+    start_bare_with_options(db, ctx, explicit_name, None, true, false)
+}
+
+/// Register a named external session, reusing bare-start lifecycle handling.
+pub(crate) fn register_bare(
+    db: &HcomDb,
+    ctx: &HcomContext,
+    name: &str,
+    tag: Option<&str>,
+) -> Result<i32> {
+    db.delete_process_bindings_for_instance(name)?;
+    start_bare_with_options(db, ctx, Some(name), tag, false, true)
+}
+
+fn start_bare_with_options(
+    db: &HcomDb,
+    ctx: &HcomContext,
+    explicit_name: Option<&str>,
+    tag: Option<&str>,
+    print_bootstrap_output: bool,
+    restore_existing: bool,
+) -> Result<i32> {
     let explicit_name = explicit_name
         .map(|name| identity::resolve_display_name(db, name).unwrap_or_else(|| name.to_string()));
     let explicit_name = explicit_name.as_deref();
@@ -776,9 +798,10 @@ fn start_bare(db: &HcomDb, ctx: &HcomContext, explicit_name: Option<&str>) -> Re
         bail!("Remote start is not supported for '{name}'. Start it on the owning device instead.");
     }
 
-    // Check if already exists and active (only for explicit names —
-    // generate_unique_name creates a placeholder row we must skip past)
-    if explicit_name.is_some()
+    // Normal start is idempotent for an active row. Registration must refresh
+    // process binding even when the saved name already exists.
+    if !restore_existing
+        && explicit_name.is_some()
         && let Ok(Some(existing)) = db.get_instance_full(&name)
         && existing.status != "stopped"
     {
@@ -796,7 +819,7 @@ fn start_bare(db: &HcomDb, ctx: &HcomContext, explicit_name: Option<&str>) -> Re
         None, // transcript_path
         Some(tool),
         false, // background
-        None,  // tag
+        tag,
         None,  // wait_timeout
         None,  // subagent_timeout
         None,  // hints
@@ -820,7 +843,9 @@ fn start_bare(db: &HcomDb, ctx: &HcomContext, explicit_name: Option<&str>) -> Re
         eprintln!("[hcom] warn: set_process_binding failed for {name}: {e}");
     }
 
-    print_bootstrap(db, ctx, &name, tool);
+    if print_bootstrap_output {
+        print_bootstrap(db, ctx, &name, tool);
+    }
 
     // Log
     db.log_event(
